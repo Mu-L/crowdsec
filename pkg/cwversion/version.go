@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	version "github.com/hashicorp/go-version"
 )
@@ -27,11 +28,22 @@ var (
 	BuildDate           string // = "I don't remember exactly"
 	Tag                 string // = "dev"
 	GoVersion           string // = "1.13"
-	Constraint_parser   = ">= 1.0, < 2.0"
+	System              string // = "linux"
+	Constraint_parser   = ">= 1.0, <= 2.0"
 	Constraint_scenario = ">= 1.0, < 3.0"
 	Constraint_api      = "v1"
 	Constraint_acquis   = ">= 1.0, < 2.0"
 )
+
+func ShowStr() string {
+	ret := ""
+	ret += fmt.Sprintf("version: %s-%s\n", Version, Tag)
+	ret += fmt.Sprintf("Codename: %s\n", Codename)
+	ret += fmt.Sprintf("BuildDate: %s\n", BuildDate)
+	ret += fmt.Sprintf("GoVersion: %s\n", GoVersion)
+	ret += fmt.Sprintf("Platform: %s\n", System)
+	return ret
+}
 
 func Show() {
 	log.Printf("version: %s-%s", Version, Tag)
@@ -45,7 +57,12 @@ func Show() {
 }
 
 func VersionStr() string {
-	return fmt.Sprintf("%s-%s", Version, Tag)
+	return fmt.Sprintf("%s-%s-%s", Version, System, Tag)
+}
+
+func VersionStrip() string {
+	version := strings.Split(Version, "-")
+	return version[0]
 }
 
 func Statisfies(strvers string, constraint string) (bool, error) {
@@ -78,7 +95,7 @@ func Latest() (string, error) {
 		return "", err
 	}
 	if _, ok := latest["name"]; !ok {
-		return "", fmt.Errorf("unable to find latest release name from github api")
+		return "", fmt.Errorf("unable to find latest release name from github api: %+v", latest)
 	}
 
 	return latest["name"].(string), nil

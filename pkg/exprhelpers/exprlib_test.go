@@ -2,6 +2,7 @@ package exprhelpers
 
 import (
 	"fmt"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 
@@ -175,6 +176,12 @@ func TestFileInit(t *testing.T) {
 		{
 			name:     "file with type:string",
 			filename: "test_data.txt",
+			types:    "string",
+			result:   3,
+		},
+		{
+			name:     "file with type:string and empty lines + commentaries",
+			filename: "test_empty_line.txt",
 			types:    "string",
 			result:   3,
 		},
@@ -361,8 +368,20 @@ func TestUpper(t *testing.T) {
 	expectedStr := "TEST"
 
 	if Upper(testStr) != expectedStr {
-		t.Fatalf("Upper() should returned 1.5 as a float")
+		t.Fatalf("Upper() should returned test in upper case")
 	}
 
 	log.Printf("test 'Upper()' : OK")
+}
+
+func TestTimeNow(t *testing.T) {
+	ti, err := time.Parse(time.RFC3339, TimeNow())
+	if err != nil {
+		t.Fatalf("Error parsing the return value of TimeNow: %s", err)
+	}
+
+	if -1*time.Until(ti) > time.Second {
+		t.Fatalf("TimeNow func should return time.Now()")
+	}
+	log.Printf("test 'TimeNow()' : OK")
 }

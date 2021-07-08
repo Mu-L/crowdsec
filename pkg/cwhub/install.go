@@ -5,11 +5,16 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/crowdsecurity/crowdsec/pkg/csconfig"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
 //DisableItem to disable an item managed by the hub, removes the symlink if purge is true
-func DisableItem(target Item, tdir string, hdir string, purge bool) (Item, error) {
+func DisableItem(hub *csconfig.Hub, target Item, purge bool, force bool) (Item, error) {
+	var tdir = hub.ConfigDir
+	var hdir = hub.HubDir
+
 	syml, err := filepath.Abs(tdir + "/" + target.Type + "/" + target.Stage + "/" + target.FileName)
 	if err != nil {
 		return Item{}, err
@@ -18,42 +23,46 @@ func DisableItem(target Item, tdir string, hdir string, purge bool) (Item, error
 		return target, fmt.Errorf("%s isn't managed by hub. Please delete manually", target.Name)
 	}
 
+	if target.Tainted && !force {
+		return target, fmt.Errorf("%s is tainted, use '--force' to overwrite", target.Name)
+	}
+
 	/*for a COLLECTIONS, disable sub-items*/
 	if target.Type == COLLECTIONS {
 		var tmp = [][]string{target.Parsers, target.PostOverflows, target.Scenarios, target.Collections}
 		for idx, ptr := range tmp {
 			ptrtype := ItemTypes[idx]
 			for _, p := range ptr {
-				if val, ok := HubIdx[ptrtype][p]; ok {
-					HubIdx[ptrtype][p], err = DisableItem(val, Installdir, Hubdir, false)
+				if val, ok := hubIdx[ptrtype][p]; ok {
+					hubIdx[ptrtype][p], err = DisableItem(hub, val, purge, force)
 					if err != nil {
-						log.Errorf("Encountered error while disabling %s %s : %s.", ptrtype, p, err)
+						return target, errors.Wrap(err, fmt.Sprintf("while disabling %s", p))
 					}
 				} else {
 					log.Errorf("Referred %s %s in collection %s doesn't exist.", ptrtype, p, target.Name)
 				}
 			}
 		}
-
 	}
 
 	stat, err := os.Lstat(syml)
 	if os.IsNotExist(err) {
-		log.Warningf("%s (%s) doesn't exist, can't disable", target.Name, syml)
-		//return target, nil //fmt.Errorf("'%s' doesn't exist", syml)
+		if !purge && !force { //we only accept to "delete" non existing items if it's a purge
+			return target, fmt.Errorf("can't delete %s : %s doesn't exist", target.Name, syml)
+		}
 	} else {
-		//if it's managed by hub, it's a symlink to Hubdir / ...
+		//if it's managed by hub, it's a symlink to csconfig.GConfig.hub.HubDir / ...
 		if stat.Mode()&os.ModeSymlink == 0 {
 			log.Warningf("%s (%s) isn't a symlink, can't disable", target.Name, syml)
 			return target, fmt.Errorf("%s isn't managed by hub", target.Name)
 		}
 		hubpath, err := os.Readlink(syml)
 		if err != nil {
-			return target, fmt.Errorf("unable to read symlink of %s (%s)", target.Name, syml)
+			return target, errors.Wrap(err, "while reading symlink")
 		}
 		absPath, err := filepath.Abs(hdir + "/" + target.RemotePath)
 		if err != nil {
-			return target, err
+			return target, errors.Wrap(err, "while abs path")
 		}
 		if hubpath != absPath {
 			log.Warningf("%s (%s) isn't a symlink to %s", target.Name, syml, absPath)
@@ -62,7 +71,7 @@ func DisableItem(target Item, tdir string, hdir string, purge bool) (Item, error
 
 		//remove the symlink
 		if err = os.Remove(syml); err != nil {
-			return target, fmt.Errorf("failed to unlink %s: %+v", syml, err)
+			return target, errors.Wrap(err, "while removing symlink")
 		}
 		log.Infof("Removed symlink [%s] : %s", target.Name, syml)
 	}
@@ -72,16 +81,18 @@ func DisableItem(target Item, tdir string, hdir string, purge bool) (Item, error
 		hubpath := hdir + "/" + target.RemotePath
 		//if purge, disable hub file
 		if err = os.Remove(hubpath); err != nil {
-			return target, fmt.Errorf("failed to purge hub file %s: %+v", hubpath, err)
+			return target, errors.Wrap(err, "while removing file")
 		}
 		target.Downloaded = false
 		log.Infof("Removed source file [%s] : %s", target.Name, hubpath)
 	}
-	HubIdx[target.Type][target.Name] = target
+	hubIdx[target.Type][target.Name] = target
 	return target, nil
 }
 
-func EnableItem(target Item, tdir string, hdir string) (Item, error) {
+func EnableItem(hub *csconfig.Hub, target Item) (Item, error) {
+	var tdir = hub.ConfigDir
+	var hdir = hub.HubDir
 	var err error
 	parent_dir := filepath.Clean(tdir + "/" + target.Type + "/" + target.Stage + "/")
 	/*create directories if needed*/
@@ -94,14 +105,14 @@ func EnableItem(target Item, tdir string, hdir string) (Item, error) {
 		}
 		/* if it's a collection, check sub-items even if the collection file itself is up-to-date */
 		if target.UpToDate && target.Type != COLLECTIONS {
-			log.Debugf("%s is installed and up-to-date, skip.", target.Name)
+			log.Tracef("%s is installed and up-to-date, skip.", target.Name)
 			return target, nil
 		}
 	}
 	if _, err := os.Stat(parent_dir); os.IsNotExist(err) {
 		log.Printf("%s doesn't exist, create", parent_dir)
 		if err := os.MkdirAll(parent_dir, os.ModePerm); err != nil {
-			return target, fmt.Errorf("unable to create parent directories")
+			return target, errors.Wrap(err, "while creating directory")
 		}
 	}
 
@@ -111,14 +122,12 @@ func EnableItem(target Item, tdir string, hdir string) (Item, error) {
 		for idx, ptr := range tmp {
 			ptrtype := ItemTypes[idx]
 			for _, p := range ptr {
-				if val, ok := HubIdx[ptrtype][p]; ok {
-					HubIdx[ptrtype][p], err = EnableItem(val, Installdir, Hubdir)
+				if val, ok := hubIdx[ptrtype][p]; ok {
+					hubIdx[ptrtype][p], err = EnableItem(hub, val)
 					if err != nil {
-						log.Errorf("Encountered error while installing sub-item %s %s : %s.", ptrtype, p, err)
-						return target, fmt.Errorf("encountered error while install %s for %s, abort.", val.Name, target.Name)
+						return target, errors.Wrap(err, fmt.Sprintf("while installing %s", p))
 					}
 				} else {
-					//log.Errorf("Referred %s %s in collection %s doesn't exist.", ptrtype, p, target.Name)
 					return target, fmt.Errorf("required %s %s of %s doesn't exist, abort.", ptrtype, p, target.Name)
 				}
 			}
@@ -129,16 +138,15 @@ func EnableItem(target Item, tdir string, hdir string) (Item, error) {
 		//tdir+target.RemotePath
 		srcPath, err := filepath.Abs(hdir + "/" + target.RemotePath)
 		if err != nil {
-			return target, fmt.Errorf("failed to resolve %s : %s", hdir+"/"+target.RemotePath, err)
+			return target, errors.Wrap(err, "while getting source path")
 		}
 		dstPath, err := filepath.Abs(parent_dir + "/" + target.FileName)
 		if err != nil {
-			return target, fmt.Errorf("failed to resolve %s : %s", parent_dir+"/"+target.FileName, err)
+			return target, errors.Wrap(err, "while getting destination path")
 		}
 		err = os.Symlink(srcPath, dstPath)
 		if err != nil {
-			log.Fatalf("Failed to symlink %s to %s : %v", srcPath, dstPath, err)
-			return target, fmt.Errorf("failed to symlink %s to %s", srcPath, dstPath)
+			return target, errors.Wrap(err, fmt.Sprintf("while creating symlink from %s to %s", srcPath, dstPath))
 		}
 		log.Printf("Enabled %s : %s", target.Type, target.Name)
 	} else {
@@ -146,6 +154,6 @@ func EnableItem(target Item, tdir string, hdir string) (Item, error) {
 		return target, nil
 	}
 	target.Installed = true
-	HubIdx[target.Type][target.Name] = target
+	hubIdx[target.Type][target.Name] = target
 	return target, nil
 }

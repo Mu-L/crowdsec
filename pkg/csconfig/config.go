@@ -1,181 +1,117 @@
 package csconfig
 
 import (
-	"flag"
 	"fmt"
 	"io/ioutil"
-	"path/filepath"
-
 	"os"
 
-	"github.com/crowdsecurity/crowdsec/pkg/cwversion"
-	"github.com/crowdsecurity/crowdsec/pkg/outputs"
-
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
 
-type SimulationConfig struct {
-	Simulation bool     `yaml:"simulation"`
-	Exclusions []string `yaml:"exclusions,omitempty"`
+/*top-level config : defaults,overriden by cfg file,overriden by cli*/
+type Config struct {
+	//just a path to ourself :p
+	FilePath     *string             `yaml:"-"`
+	Self         []byte              `yaml:"-"`
+	Common       *CommonCfg          `yaml:"common,omitempty"`
+	Prometheus   *PrometheusCfg      `yaml:"prometheus,omitempty"`
+	Crowdsec     *CrowdsecServiceCfg `yaml:"crowdsec_service,omitempty"`
+	Cscli        *CscliCfg           `yaml:"cscli,omitempty"`
+	DbConfig     *DatabaseCfg        `yaml:"db_config,omitempty"`
+	API          *APICfg             `yaml:"api,omitempty"`
+	ConfigPaths  *ConfigurationPaths `yaml:"config_paths,omitempty"`
+	DisableAPI   bool                `yaml:"-"`
+	DisableAgent bool                `yaml:"-"`
+	Hub          *Hub                `yaml:"-"`
 }
 
-// CrowdSec is the structure of the crowdsec configuration
-type CrowdSec struct {
-	WorkingFolder     string    `yaml:"working_dir,omitempty"`
-	DataFolder        string    `yaml:"data_dir,omitempty"`
-	ConfigFolder      string    `yaml:"config_dir,omitempty"`
-	AcquisitionFile   string    `yaml:"acquis_path,omitempty"`
-	SingleFile        string    //for forensic mode
-	SingleFileLabel   string    //for forensic mode
-	PIDFolder         string    `yaml:"pid_dir,omitempty"`
-	LogFolder         string    `yaml:"log_dir,omitempty"`
-	LogMode           string    `yaml:"log_mode,omitempty"`  //like file, syslog or stdout ?
-	LogLevel          log.Level `yaml:"log_level,omitempty"` //trace,debug,info,warning,error
-	Daemonize         bool      `yaml:"daemon,omitempty"`    //true -> go background
-	Profiling         bool      `yaml:"profiling,omitempty"` //true -> enable runtime profiling
-	APIMode           bool      `yaml:"apimode,omitempty"`   //true -> enable api push
-	CsCliFolder       string    `yaml:"cscli_dir"`           //cscli folder
-	NbParsers         int       `yaml:"parser_routines"`     //the number of go routines to start for parsing
-	SimulationCfgPath string    `yaml:"simulation_path,omitempty"`
-	SimulationCfg     *SimulationConfig
-	Linter            bool
-	Prometheus        bool
-	PrometheusMode    string `yaml:"prometheus_mode"`
-	HTTPListen        string `yaml:"http_listen,omitempty"`
-	RestoreMode       string
-	DumpBuckets       bool
-	OutputConfig      *outputs.OutputFactory `yaml:"plugin"`
-}
-
-// NewCrowdSecConfig create a new crowdsec configuration with default configuration
-func NewCrowdSecConfig() *CrowdSec {
-	return &CrowdSec{
-		LogLevel:      log.InfoLevel,
-		Daemonize:     false,
-		Profiling:     false,
-		WorkingFolder: "/tmp/",
-		DataFolder:    "/var/lib/crowdsec/data/",
-		ConfigFolder:  "/etc/crowdsec/config/",
-		PIDFolder:     "/var/run/",
-		LogFolder:     "/var/log/",
-		LogMode:       "stdout",
-		APIMode:       false,
-		NbParsers:     1,
-		Prometheus:    false,
-		HTTPListen:    "127.0.0.1:6060",
+func (c *Config) Dump() error {
+	out, err := yaml.Marshal(c)
+	if err != nil {
+		return errors.Wrap(err, "failed marshaling config")
 	}
-}
-
-func (c *CrowdSec) LoadSimulation() error {
-	if c.SimulationCfgPath != "" {
-		rcfg, err := ioutil.ReadFile(c.SimulationCfgPath)
-		if err != nil {
-			return fmt.Errorf("while reading '%s' : %s", c.SimulationCfgPath, err)
-		}
-		simCfg := SimulationConfig{}
-		if err := yaml.UnmarshalStrict(rcfg, &simCfg); err != nil {
-			return fmt.Errorf("while parsing '%s' : %s", c.SimulationCfgPath, err)
-		}
-		c.SimulationCfg = &simCfg
-	}
+	fmt.Printf("%s", string(out))
 	return nil
 }
 
-func (c *CrowdSec) LoadConfigurationFile(configFile *string) error {
-	/*overriden by cfg file*/
-
-	if *configFile != "" {
-		rcfg, err := ioutil.ReadFile(*configFile)
-		if err != nil {
-			return fmt.Errorf("read '%s' : %s", *configFile, err)
-		}
-		if err := yaml.UnmarshalStrict(rcfg, c); err != nil {
-			return fmt.Errorf("parse '%s' : %s", *configFile, err)
-		}
-		if c.AcquisitionFile == "" {
-			c.AcquisitionFile = filepath.Clean(c.ConfigFolder + "/acquis.yaml")
-		}
+func NewConfig(configFile string, disableAgent bool, disableAPI bool) (*Config, error) {
+	fcontent, err := ioutil.ReadFile(configFile)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to read config file")
+	}
+	configData := os.ExpandEnv(string(fcontent))
+	cfg := Config{
+		FilePath:     &configFile,
+		DisableAgent: disableAgent,
+		DisableAPI:   disableAPI,
 	}
 
-	if err := c.LoadSimulation(); err != nil {
-		return fmt.Errorf("loading simulation config : %s", err)
+	err = yaml.UnmarshalStrict([]byte(configData), &cfg)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	return &cfg, nil
 }
 
-// LoadConfig return configuration parsed from command line and configuration file
-func (c *CrowdSec) LoadConfig() error {
-	AcquisitionFile := flag.String("acquis", "", "path to acquis.yaml")
-	configFile := flag.String("c", "/etc/crowdsec/config/default.yaml", "configuration file")
-	printTrace := flag.Bool("trace", false, "VERY verbose")
-	printDebug := flag.Bool("debug", false, "print debug-level on stdout")
-	printInfo := flag.Bool("info", false, "print info-level on stdout")
-	printVersion := flag.Bool("version", false, "display version")
-	APIMode := flag.Bool("api", false, "perform pushes to api")
-	profileMode := flag.Bool("profile", false, "Enable performance profiling")
-	catFile := flag.String("file", "", "Process a single file in time-machine")
-	catFileType := flag.String("type", "", "Labels.type for file in time-machine")
-	daemonMode := flag.Bool("daemon", false, "Daemonize, go background, drop PID file, log to file")
-	testMode := flag.Bool("t", false, "only test configs")
-	prometheus := flag.Bool("prometheus-metrics", false, "expose http prometheus collector (see http_listen)")
-	restoreMode := flag.String("restore-state", "", "[dev] restore buckets state from json file")
-	dumpMode := flag.Bool("dump-state", false, "[dev] Dump bucket state at the end of run.")
-
-	flag.Parse()
-
-	if *printVersion {
-		cwversion.Show()
-		os.Exit(0)
+func NewDefaultConfig() *Config {
+	logLevel := log.InfoLevel
+	CommonCfg := CommonCfg{
+		Daemonize: false,
+		PidDir:    "/tmp/",
+		LogMedia:  "stdout",
+		//LogDir unneeded
+		LogLevel:   &logLevel,
+		WorkingDir: ".",
+	}
+	prometheus := PrometheusCfg{
+		Enabled: true,
+		Level:   "full",
+	}
+	configPaths := ConfigurationPaths{
+		ConfigDir:          "/etc/crowdsec/",
+		DataDir:            "/var/lib/crowdsec/data/",
+		SimulationFilePath: "/etc/crowdsec/config/simulation.yaml",
+		HubDir:             "/etc/crowdsec/hub",
+		HubIndexFile:       "/etc/crowdsec/hub/.index.json",
+	}
+	crowdsecCfg := CrowdsecServiceCfg{
+		AcquisitionFilePath: "/etc/crowdsec/config/acquis.yaml",
+		ParserRoutinesCount: 1,
 	}
 
-	if *catFile != "" {
-		if *catFileType == "" {
-			return fmt.Errorf("-file requires -type")
-		}
-		c.SingleFile = *catFile
-		c.SingleFileLabel = *catFileType
+	cscliCfg := CscliCfg{
+		Output: "human",
 	}
 
-	if err := c.LoadConfigurationFile(configFile); err != nil {
-		return fmt.Errorf("Error while loading configuration : %s", err)
+	apiCfg := APICfg{
+		Client: &LocalApiClientCfg{
+			CredentialsFilePath: "/etc/crowdsec/config/lapi-secrets.yaml",
+		},
+		Server: &LocalApiServerCfg{
+			ListenURI:              "127.0.0.1:8080",
+			UseForwardedForHeaders: false,
+			OnlineClient: &OnlineApiClientCfg{
+				CredentialsFilePath: "/etc/crowdsec/config/online-api-secrets.yaml",
+			},
+		},
 	}
 
-	if *AcquisitionFile != "" {
-		c.AcquisitionFile = *AcquisitionFile
-	}
-	if *dumpMode {
-		c.DumpBuckets = true
-	}
-	if *prometheus {
-		c.Prometheus = true
-	}
-	if *testMode {
-		c.Linter = true
-	}
-	/*overriden by cmdline*/
-	if *daemonMode {
-		c.Daemonize = true
-	}
-	if *profileMode {
-		c.Profiling = true
-	}
-	if *printDebug {
-		c.LogLevel = log.DebugLevel
-	}
-	if *printInfo {
-		c.LogLevel = log.InfoLevel
-	}
-	if *printTrace {
-		c.LogLevel = log.TraceLevel
-	}
-	if *APIMode {
-		c.APIMode = true
+	dbConfig := DatabaseCfg{
+		Type:   "sqlite",
+		DbPath: "/var/lib/crowdsec/data/crowdsec.db",
 	}
 
-	if *restoreMode != "" {
-		c.RestoreMode = *restoreMode
+	globalCfg := Config{
+		Common:      &CommonCfg,
+		Prometheus:  &prometheus,
+		Crowdsec:    &crowdsecCfg,
+		Cscli:       &cscliCfg,
+		API:         &apiCfg,
+		ConfigPaths: &configPaths,
+		DbConfig:    &dbConfig,
 	}
 
-	return nil
+	return &globalCfg
 }

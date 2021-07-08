@@ -9,7 +9,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -38,6 +40,7 @@ func GetExprEnv(ctx map[string]interface{}) map[string]interface{} {
 		"RegexpInFile":   RegexpInFile,
 		"Upper":          Upper,
 		"IpInRange":      IpInRange,
+		"TimeNow":        TimeNow,
 	}
 	for k, v := range ctx {
 		ExprLib[k] = v
@@ -72,6 +75,9 @@ func FileInit(fileFolder string, filename string, fileType string) error {
 		if strings.HasPrefix(scanner.Text(), "#") { // allow comments
 			continue
 		}
+		if len(scanner.Text()) == 0 { //skip empty lines
+			continue
+		}
 		switch fileType {
 		case "regex", "regexp":
 			dataFileRegex[filename] = append(dataFileRegex[filename], regexp.MustCompile(scanner.Text()))
@@ -93,6 +99,7 @@ func File(filename string) []string {
 		return dataFile[filename]
 	}
 	log.Errorf("file '%s' (type:string) not found in expr library", filename)
+	log.Errorf("expr library : %s", spew.Sdump(dataFile))
 	return []string{}
 }
 
@@ -105,6 +112,7 @@ func RegexpInFile(data string, filename string) bool {
 		}
 	} else {
 		log.Errorf("file '%s' (type:regexp) not found in expr library", filename)
+		log.Errorf("expr library : %s", spew.Sdump(dataFileRegex))
 	}
 	return false
 }
@@ -127,4 +135,8 @@ func IpInRange(ip string, ipRange string) bool {
 		return true
 	}
 	return false
+}
+
+func TimeNow() string {
+	return time.Now().Format(time.RFC3339)
 }
