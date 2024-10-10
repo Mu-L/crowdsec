@@ -29,7 +29,6 @@ import (
 	"github.com/crowdsecurity/crowdsec/pkg/csconfig"
 	"github.com/crowdsecurity/crowdsec/pkg/csplugin"
 	"github.com/crowdsecurity/crowdsec/pkg/csprofiles"
-	"github.com/crowdsecurity/crowdsec/pkg/cwversion"
 	"github.com/crowdsecurity/crowdsec/pkg/models"
 	"github.com/crowdsecurity/crowdsec/pkg/types"
 )
@@ -73,10 +72,10 @@ func (cli *cliNotifications) NewCommand() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(cli.NewListCmd())
-	cmd.AddCommand(cli.NewInspectCmd())
-	cmd.AddCommand(cli.NewReinjectCmd())
-	cmd.AddCommand(cli.NewTestCmd())
+	cmd.AddCommand(cli.newListCmd())
+	cmd.AddCommand(cli.newInspectCmd())
+	cmd.AddCommand(cli.newReinjectCmd())
+	cmd.AddCommand(cli.newTestCmd())
 
 	return cmd
 }
@@ -153,7 +152,7 @@ func (cli *cliNotifications) getProfilesConfigs() (map[string]NotificationsCfg, 
 	return ncfgs, nil
 }
 
-func (cli *cliNotifications) NewListCmd() *cobra.Command {
+func (cli *cliNotifications) newListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "list",
 		Short:             "list notifications plugins",
@@ -173,7 +172,7 @@ func (cli *cliNotifications) NewListCmd() *cobra.Command {
 			} else if cfg.Cscli.Output == "json" {
 				x, err := json.MarshalIndent(ncfgs, "", " ")
 				if err != nil {
-					return fmt.Errorf("failed to marshal notification configuration: %w", err)
+					return fmt.Errorf("failed to serialize notification configuration: %w", err)
 				}
 				fmt.Printf("%s", string(x))
 			} else if cfg.Cscli.Output == "raw" {
@@ -202,7 +201,7 @@ func (cli *cliNotifications) NewListCmd() *cobra.Command {
 	return cmd
 }
 
-func (cli *cliNotifications) NewInspectCmd() *cobra.Command {
+func (cli *cliNotifications) newInspectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "inspect",
 		Short:             "Inspect notifications plugin",
@@ -232,7 +231,7 @@ func (cli *cliNotifications) NewInspectCmd() *cobra.Command {
 			} else if cfg.Cscli.Output == "json" {
 				x, err := json.MarshalIndent(cfg, "", " ")
 				if err != nil {
-					return fmt.Errorf("failed to marshal notification configuration: %w", err)
+					return fmt.Errorf("failed to serialize notification configuration: %w", err)
 				}
 				fmt.Printf("%s", string(x))
 			}
@@ -261,7 +260,7 @@ func (cli *cliNotifications) notificationConfigFilter(cmd *cobra.Command, args [
 	return ret, cobra.ShellCompDirectiveNoFileComp
 }
 
-func (cli cliNotifications) NewTestCmd() *cobra.Command {
+func (cli cliNotifications) newTestCmd() *cobra.Command {
 	var (
 		pluginBroker  csplugin.PluginBroker
 		pluginTomb    tomb.Tomb
@@ -276,7 +275,8 @@ func (cli cliNotifications) NewTestCmd() *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		DisableAutoGenTag: true,
 		ValidArgsFunction: cli.notificationConfigFilter,
-		PreRunE: func(_ *cobra.Command, args []string) error {
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
 			cfg := cli.cfg()
 			pconfigs, err := cli.getPluginConfigs()
 			if err != nil {
@@ -287,7 +287,7 @@ func (cli cliNotifications) NewTestCmd() *cobra.Command {
 				return fmt.Errorf("plugin name: '%s' does not exist", args[0])
 			}
 			// Create a single profile with plugin name as notification name
-			return pluginBroker.Init(cfg.PluginConfig, []*csconfig.ProfileCfg{
+			return pluginBroker.Init(ctx, cfg.PluginConfig, []*csconfig.ProfileCfg{
 				{
 					Notifications: []string{
 						pcfg.Name,
@@ -332,7 +332,7 @@ func (cli cliNotifications) NewTestCmd() *cobra.Command {
 				CreatedAt: time.Now().UTC().Format(time.RFC3339),
 			}
 			if err := yaml.Unmarshal([]byte(alertOverride), alert); err != nil {
-				return fmt.Errorf("failed to unmarshal alert override: %w", err)
+				return fmt.Errorf("failed to parse alert override: %w", err)
 			}
 
 			pluginBroker.PluginChannel <- csplugin.ProfileAlert{
@@ -352,7 +352,7 @@ func (cli cliNotifications) NewTestCmd() *cobra.Command {
 	return cmd
 }
 
-func (cli *cliNotifications) NewReinjectCmd() *cobra.Command {
+func (cli *cliNotifications) newReinjectCmd() *cobra.Command {
 	var (
 		alertOverride string
 		alert         *models.Alert
@@ -369,30 +369,31 @@ cscli notifications reinject <alert_id> -a '{"remediation": true,"scenario":"not
 `,
 		Args:              cobra.ExactArgs(1),
 		DisableAutoGenTag: true,
-		PreRunE: func(_ *cobra.Command, args []string) error {
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
-			alert, err = cli.fetchAlertFromArgString(args[0])
+			alert, err = cli.fetchAlertFromArgString(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
 
 			return nil
 		},
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			var (
 				pluginBroker csplugin.PluginBroker
 				pluginTomb   tomb.Tomb
 			)
 
+			ctx := cmd.Context()
 			cfg := cli.cfg()
 
 			if alertOverride != "" {
 				if err := json.Unmarshal([]byte(alertOverride), alert); err != nil {
-					return fmt.Errorf("can't unmarshal data in the alert flag: %w", err)
+					return fmt.Errorf("can't parse data in the alert flag: %w", err)
 				}
 			}
 
-			err := pluginBroker.Init(cfg.PluginConfig, cfg.API.Server.Profiles, cfg.ConfigPaths)
+			err := pluginBroker.Init(ctx, cfg.PluginConfig, cfg.API.Server.Profiles, cfg.ConfigPaths)
 			if err != nil {
 				return fmt.Errorf("can't initialize plugins: %w", err)
 			}
@@ -448,7 +449,7 @@ cscli notifications reinject <alert_id> -a '{"remediation": true,"scenario":"not
 	return cmd
 }
 
-func (cli *cliNotifications) fetchAlertFromArgString(toParse string) (*models.Alert, error) {
+func (cli *cliNotifications) fetchAlertFromArgString(ctx context.Context, toParse string) (*models.Alert, error) {
 	cfg := cli.cfg()
 
 	id, err := strconv.Atoi(toParse)
@@ -464,7 +465,6 @@ func (cli *cliNotifications) fetchAlertFromArgString(toParse string) (*models.Al
 	client, err := apiclient.NewClient(&apiclient.Config{
 		MachineID:     cfg.API.Client.Credentials.Login,
 		Password:      strfmt.Password(cfg.API.Client.Credentials.Password),
-		UserAgent:     cwversion.UserAgent(),
 		URL:           apiURL,
 		VersionPrefix: "v1",
 	})
@@ -472,7 +472,7 @@ func (cli *cliNotifications) fetchAlertFromArgString(toParse string) (*models.Al
 		return nil, fmt.Errorf("error creating the client for the API: %w", err)
 	}
 
-	alert, _, err := client.Alerts.GetByID(context.Background(), id)
+	alert, _, err := client.Alerts.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("can't find alert with id %d: %w", id, err)
 	}

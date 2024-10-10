@@ -55,14 +55,14 @@ cscli simulation disable crowdsecurity/ssh-bf`,
 	cmd.Flags().SortFlags = false
 	cmd.PersistentFlags().SortFlags = false
 
-	cmd.AddCommand(cli.NewEnableCmd())
-	cmd.AddCommand(cli.NewDisableCmd())
-	cmd.AddCommand(cli.NewStatusCmd())
+	cmd.AddCommand(cli.newEnableCmd())
+	cmd.AddCommand(cli.newDisableCmd())
+	cmd.AddCommand(cli.newStatusCmd())
 
 	return cmd
 }
 
-func (cli *cliSimulation) NewEnableCmd() *cobra.Command {
+func (cli *cliSimulation) newEnableCmd() *cobra.Command {
 	var forceGlobalSimulation bool
 
 	cmd := &cobra.Command{
@@ -122,7 +122,7 @@ func (cli *cliSimulation) NewEnableCmd() *cobra.Command {
 	return cmd
 }
 
-func (cli *cliSimulation) NewDisableCmd() *cobra.Command {
+func (cli *cliSimulation) newDisableCmd() *cobra.Command {
 	var forceGlobalSimulation bool
 
 	cmd := &cobra.Command{
@@ -169,7 +169,7 @@ func (cli *cliSimulation) NewDisableCmd() *cobra.Command {
 	return cmd
 }
 
-func (cli *cliSimulation) NewStatusCmd() *cobra.Command {
+func (cli *cliSimulation) newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "status",
 		Short:             "Show simulation mode status",
@@ -220,7 +220,7 @@ func (cli *cliSimulation) dumpSimulationFile() error {
 
 	newConfigSim, err := yaml.Marshal(cfg.Cscli.SimulationConfig)
 	if err != nil {
-		return fmt.Errorf("unable to marshal simulation configuration: %w", err)
+		return fmt.Errorf("unable to serialize simulation configuration: %w", err)
 	}
 
 	err = os.WriteFile(cfg.ConfigPaths.SimulationFilePath, newConfigSim, 0o644)
@@ -242,7 +242,7 @@ func (cli *cliSimulation) disableGlobalSimulation() error {
 
 	newConfigSim, err := yaml.Marshal(cfg.Cscli.SimulationConfig)
 	if err != nil {
-		return fmt.Errorf("unable to marshal new simulation configuration: %w", err)
+		return fmt.Errorf("unable to serialize new simulation configuration: %w", err)
 	}
 
 	err = os.WriteFile(cfg.ConfigPaths.SimulationFilePath, newConfigSim, 0o644)

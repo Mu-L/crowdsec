@@ -25,12 +25,11 @@ import (
 	"github.com/crowdsecurity/crowdsec/cmd/crowdsec-cli/require"
 	"github.com/crowdsecurity/crowdsec/pkg/apiclient"
 	"github.com/crowdsecurity/crowdsec/pkg/csconfig"
-	"github.com/crowdsecurity/crowdsec/pkg/cwversion"
 	"github.com/crowdsecurity/crowdsec/pkg/models"
 	"github.com/crowdsecurity/crowdsec/pkg/types"
 )
 
-func DecisionsFromAlert(alert *models.Alert) string {
+func decisionsFromAlert(alert *models.Alert) string {
 	ret := ""
 	decMap := make(map[string]int)
 
@@ -45,7 +44,7 @@ func DecisionsFromAlert(alert *models.Alert) string {
 	}
 
 	for _, key := range maptools.SortedKeys(decMap) {
-		if len(ret) > 0 {
+		if ret != "" {
 			ret += " "
 		}
 
@@ -78,7 +77,7 @@ func (cli *cliAlerts) alertsToTable(alerts *models.GetAlertsResponse, printMachi
 				*alertItem.Scenario,
 				alertItem.Source.Cn,
 				alertItem.Source.GetAsNumberName(),
-				DecisionsFromAlert(alertItem),
+				decisionsFromAlert(alertItem),
 				*alertItem.StartAt,
 			}
 			if printMachine {
@@ -217,7 +216,6 @@ func (cli *cliAlerts) NewCommand() *cobra.Command {
 			cli.client, err = apiclient.NewClient(&apiclient.Config{
 				MachineID:     cfg.API.Client.Credentials.Login,
 				Password:      strfmt.Password(cfg.API.Client.Credentials.Password),
-				UserAgent:     cwversion.UserAgent(),
 				URL:           apiURL,
 				VersionPrefix: "v1",
 			})
@@ -229,15 +227,15 @@ func (cli *cliAlerts) NewCommand() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(cli.NewListCmd())
-	cmd.AddCommand(cli.NewInspectCmd())
-	cmd.AddCommand(cli.NewFlushCmd())
-	cmd.AddCommand(cli.NewDeleteCmd())
+	cmd.AddCommand(cli.newListCmd())
+	cmd.AddCommand(cli.newInspectCmd())
+	cmd.AddCommand(cli.newFlushCmd())
+	cmd.AddCommand(cli.newDeleteCmd())
 
 	return cmd
 }
 
-func (cli *cliAlerts) list(alertListFilter apiclient.AlertsListOpts, limit *int, contained *bool, printMachine bool) error {
+func (cli *cliAlerts) list(ctx context.Context, alertListFilter apiclient.AlertsListOpts, limit *int, contained *bool, printMachine bool) error {
 	var err error
 
 	*alertListFilter.ScopeEquals, err = SanitizeScope(*alertListFilter.ScopeEquals, *alertListFilter.IPEquals, *alertListFilter.RangeEquals)
@@ -313,7 +311,7 @@ func (cli *cliAlerts) list(alertListFilter apiclient.AlertsListOpts, limit *int,
 		alertListFilter.Contains = new(bool)
 	}
 
-	alerts, _, err := cli.client.Alerts.List(context.Background(), alertListFilter)
+	alerts, _, err := cli.client.Alerts.List(ctx, alertListFilter)
 	if err != nil {
 		return fmt.Errorf("unable to list alerts: %w", err)
 	}
@@ -325,7 +323,7 @@ func (cli *cliAlerts) list(alertListFilter apiclient.AlertsListOpts, limit *int,
 	return nil
 }
 
-func (cli *cliAlerts) NewListCmd() *cobra.Command {
+func (cli *cliAlerts) newListCmd() *cobra.Command {
 	alertListFilter := apiclient.AlertsListOpts{
 		ScopeEquals:    new(string),
 		ValueEquals:    new(string),
@@ -356,7 +354,7 @@ cscli alerts list --type ban`,
 		Long:              `List alerts with optional filters`,
 		DisableAutoGenTag: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cli.list(alertListFilter, limit, contained, printMachine)
+			return cli.list(cmd.Context(), alertListFilter, limit, contained, printMachine)
 		},
 	}
 
@@ -379,58 +377,58 @@ cscli alerts list --type ban`,
 	return cmd
 }
 
-func (cli *cliAlerts) delete(alertDeleteFilter apiclient.AlertsDeleteOpts, ActiveDecision *bool, AlertDeleteAll bool, delAlertByID string, contained *bool) error {
+func (cli *cliAlerts) delete(ctx context.Context, delFilter apiclient.AlertsDeleteOpts, activeDecision *bool, deleteAll bool, delAlertByID string, contained *bool) error {
 	var err error
 
-	if !AlertDeleteAll {
-		*alertDeleteFilter.ScopeEquals, err = SanitizeScope(*alertDeleteFilter.ScopeEquals, *alertDeleteFilter.IPEquals, *alertDeleteFilter.RangeEquals)
+	if !deleteAll {
+		*delFilter.ScopeEquals, err = SanitizeScope(*delFilter.ScopeEquals, *delFilter.IPEquals, *delFilter.RangeEquals)
 		if err != nil {
 			return err
 		}
 
-		if ActiveDecision != nil {
-			alertDeleteFilter.ActiveDecisionEquals = ActiveDecision
+		if activeDecision != nil {
+			delFilter.ActiveDecisionEquals = activeDecision
 		}
 
-		if *alertDeleteFilter.ScopeEquals == "" {
-			alertDeleteFilter.ScopeEquals = nil
+		if *delFilter.ScopeEquals == "" {
+			delFilter.ScopeEquals = nil
 		}
 
-		if *alertDeleteFilter.ValueEquals == "" {
-			alertDeleteFilter.ValueEquals = nil
+		if *delFilter.ValueEquals == "" {
+			delFilter.ValueEquals = nil
 		}
 
-		if *alertDeleteFilter.ScenarioEquals == "" {
-			alertDeleteFilter.ScenarioEquals = nil
+		if *delFilter.ScenarioEquals == "" {
+			delFilter.ScenarioEquals = nil
 		}
 
-		if *alertDeleteFilter.IPEquals == "" {
-			alertDeleteFilter.IPEquals = nil
+		if *delFilter.IPEquals == "" {
+			delFilter.IPEquals = nil
 		}
 
-		if *alertDeleteFilter.RangeEquals == "" {
-			alertDeleteFilter.RangeEquals = nil
+		if *delFilter.RangeEquals == "" {
+			delFilter.RangeEquals = nil
 		}
 
 		if contained != nil && *contained {
-			alertDeleteFilter.Contains = new(bool)
+			delFilter.Contains = new(bool)
 		}
 
 		limit := 0
-		alertDeleteFilter.Limit = &limit
+		delFilter.Limit = &limit
 	} else {
 		limit := 0
-		alertDeleteFilter = apiclient.AlertsDeleteOpts{Limit: &limit}
+		delFilter = apiclient.AlertsDeleteOpts{Limit: &limit}
 	}
 
 	var alerts *models.DeleteAlertsResponse
 	if delAlertByID == "" {
-		alerts, _, err = cli.client.Alerts.Delete(context.Background(), alertDeleteFilter)
+		alerts, _, err = cli.client.Alerts.Delete(ctx, delFilter)
 		if err != nil {
 			return fmt.Errorf("unable to delete alerts: %w", err)
 		}
 	} else {
-		alerts, _, err = cli.client.Alerts.DeleteOne(context.Background(), delAlertByID)
+		alerts, _, err = cli.client.Alerts.DeleteOne(ctx, delAlertByID)
 		if err != nil {
 			return fmt.Errorf("unable to delete alert: %w", err)
 		}
@@ -441,14 +439,14 @@ func (cli *cliAlerts) delete(alertDeleteFilter apiclient.AlertsDeleteOpts, Activ
 	return nil
 }
 
-func (cli *cliAlerts) NewDeleteCmd() *cobra.Command {
+func (cli *cliAlerts) newDeleteCmd() *cobra.Command {
 	var (
-		ActiveDecision *bool
-		AlertDeleteAll bool
+		activeDecision *bool
+		deleteAll      bool
 		delAlertByID   string
 	)
 
-	alertDeleteFilter := apiclient.AlertsDeleteOpts{
+	delFilter := apiclient.AlertsDeleteOpts{
 		ScopeEquals:    new(string),
 		ValueEquals:    new(string),
 		ScenarioEquals: new(string),
@@ -469,12 +467,12 @@ cscli alerts delete -s crowdsecurity/ssh-bf"`,
 		Aliases:           []string{"remove"},
 		Args:              cobra.ExactArgs(0),
 		PreRunE: func(cmd *cobra.Command, _ []string) error {
-			if AlertDeleteAll {
+			if deleteAll {
 				return nil
 			}
-			if *alertDeleteFilter.ScopeEquals == "" && *alertDeleteFilter.ValueEquals == "" &&
-				*alertDeleteFilter.ScenarioEquals == "" && *alertDeleteFilter.IPEquals == "" &&
-				*alertDeleteFilter.RangeEquals == "" && delAlertByID == "" {
+			if *delFilter.ScopeEquals == "" && *delFilter.ValueEquals == "" &&
+				*delFilter.ScenarioEquals == "" && *delFilter.IPEquals == "" &&
+				*delFilter.RangeEquals == "" && delAlertByID == "" {
 				_ = cmd.Usage()
 				return errors.New("at least one filter or --all must be specified")
 			}
@@ -482,25 +480,25 @@ cscli alerts delete -s crowdsecurity/ssh-bf"`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cli.delete(alertDeleteFilter, ActiveDecision, AlertDeleteAll, delAlertByID, contained)
+			return cli.delete(cmd.Context(), delFilter, activeDecision, deleteAll, delAlertByID, contained)
 		},
 	}
 
 	flags := cmd.Flags()
 	flags.SortFlags = false
-	flags.StringVar(alertDeleteFilter.ScopeEquals, "scope", "", "the scope (ie. ip,range)")
-	flags.StringVarP(alertDeleteFilter.ValueEquals, "value", "v", "", "the value to match for in the specified scope")
-	flags.StringVarP(alertDeleteFilter.ScenarioEquals, "scenario", "s", "", "the scenario (ie. crowdsecurity/ssh-bf)")
-	flags.StringVarP(alertDeleteFilter.IPEquals, "ip", "i", "", "Source ip (shorthand for --scope ip --value <IP>)")
-	flags.StringVarP(alertDeleteFilter.RangeEquals, "range", "r", "", "Range source ip (shorthand for --scope range --value <RANGE>)")
+	flags.StringVar(delFilter.ScopeEquals, "scope", "", "the scope (ie. ip,range)")
+	flags.StringVarP(delFilter.ValueEquals, "value", "v", "", "the value to match for in the specified scope")
+	flags.StringVarP(delFilter.ScenarioEquals, "scenario", "s", "", "the scenario (ie. crowdsecurity/ssh-bf)")
+	flags.StringVarP(delFilter.IPEquals, "ip", "i", "", "Source ip (shorthand for --scope ip --value <IP>)")
+	flags.StringVarP(delFilter.RangeEquals, "range", "r", "", "Range source ip (shorthand for --scope range --value <RANGE>)")
 	flags.StringVar(&delAlertByID, "id", "", "alert ID")
-	flags.BoolVarP(&AlertDeleteAll, "all", "a", false, "delete all alerts")
+	flags.BoolVarP(&deleteAll, "all", "a", false, "delete all alerts")
 	flags.BoolVar(contained, "contained", false, "query decisions contained by range")
 
 	return cmd
 }
 
-func (cli *cliAlerts) inspect(details bool, alertIDs ...string) error {
+func (cli *cliAlerts) inspect(ctx context.Context, details bool, alertIDs ...string) error {
 	cfg := cli.cfg()
 
 	for _, alertID := range alertIDs {
@@ -509,7 +507,7 @@ func (cli *cliAlerts) inspect(details bool, alertIDs ...string) error {
 			return fmt.Errorf("bad alert id %s", alertID)
 		}
 
-		alert, _, err := cli.client.Alerts.GetByID(context.Background(), id)
+		alert, _, err := cli.client.Alerts.GetByID(ctx, id)
 		if err != nil {
 			return fmt.Errorf("can't find alert with id %s: %w", alertID, err)
 		}
@@ -523,14 +521,14 @@ func (cli *cliAlerts) inspect(details bool, alertIDs ...string) error {
 		case "json":
 			data, err := json.MarshalIndent(alert, "", "  ")
 			if err != nil {
-				return fmt.Errorf("unable to marshal alert with id %s: %w", alertID, err)
+				return fmt.Errorf("unable to serialize alert with id %s: %w", alertID, err)
 			}
 
 			fmt.Printf("%s\n", string(data))
 		case "raw":
 			data, err := yaml.Marshal(alert)
 			if err != nil {
-				return fmt.Errorf("unable to marshal alert with id %s: %w", alertID, err)
+				return fmt.Errorf("unable to serialize alert with id %s: %w", alertID, err)
 			}
 
 			fmt.Println(string(data))
@@ -540,7 +538,7 @@ func (cli *cliAlerts) inspect(details bool, alertIDs ...string) error {
 	return nil
 }
 
-func (cli *cliAlerts) NewInspectCmd() *cobra.Command {
+func (cli *cliAlerts) newInspectCmd() *cobra.Command {
 	var details bool
 
 	cmd := &cobra.Command{
@@ -553,7 +551,7 @@ func (cli *cliAlerts) NewInspectCmd() *cobra.Command {
 				_ = cmd.Help()
 				return errors.New("missing alert_id")
 			}
-			return cli.inspect(details, args...)
+			return cli.inspect(cmd.Context(), details, args...)
 		},
 	}
 
@@ -563,7 +561,7 @@ func (cli *cliAlerts) NewInspectCmd() *cobra.Command {
 	return cmd
 }
 
-func (cli *cliAlerts) NewFlushCmd() *cobra.Command {
+func (cli *cliAlerts) newFlushCmd() *cobra.Command {
 	var (
 		maxItems int
 		maxAge   string
@@ -577,15 +575,17 @@ func (cli *cliAlerts) NewFlushCmd() *cobra.Command {
 		DisableAutoGenTag: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg := cli.cfg()
+			ctx := cmd.Context()
+
 			if err := require.LAPI(cfg); err != nil {
 				return err
 			}
-			db, err := require.DBClient(cmd.Context(), cfg.DbConfig)
+			db, err := require.DBClient(ctx, cfg.DbConfig)
 			if err != nil {
 				return err
 			}
 			log.Info("Flushing alerts. !! This may take a long time !!")
-			err = db.FlushAlerts(maxAge, maxItems)
+			err = db.FlushAlerts(ctx, maxAge, maxItems)
 			if err != nil {
 				return fmt.Errorf("unable to flush alerts: %w", err)
 			}

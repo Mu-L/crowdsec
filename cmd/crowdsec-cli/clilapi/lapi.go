@@ -24,7 +24,6 @@ import (
 	"github.com/crowdsecurity/crowdsec/pkg/apiclient"
 	"github.com/crowdsecurity/crowdsec/pkg/csconfig"
 	"github.com/crowdsecurity/crowdsec/pkg/cwhub"
-	"github.com/crowdsecurity/crowdsec/pkg/cwversion"
 	"github.com/crowdsecurity/crowdsec/pkg/exprhelpers"
 	"github.com/crowdsecurity/crowdsec/pkg/models"
 	"github.com/crowdsecurity/crowdsec/pkg/parser"
@@ -45,7 +44,7 @@ func New(cfg configGetter) *cliLapi {
 }
 
 // queryLAPIStatus checks if the Local API is reachable, and if the credentials are correct.
-func queryLAPIStatus(hub *cwhub.Hub, credURL string, login string, password string) (bool, error) {
+func queryLAPIStatus(ctx context.Context, hub *cwhub.Hub, credURL string, login string, password string) (bool, error) {
 	apiURL, err := url.Parse(credURL)
 	if err != nil {
 		return false, err
@@ -53,7 +52,7 @@ func queryLAPIStatus(hub *cwhub.Hub, credURL string, login string, password stri
 
 	client, err := apiclient.NewDefaultClient(apiURL,
 		LAPIURLPrefix,
-		cwversion.UserAgent(),
+		"",
 		nil)
 	if err != nil {
 		return false, err
@@ -69,7 +68,7 @@ func queryLAPIStatus(hub *cwhub.Hub, credURL string, login string, password stri
 		Scenarios: itemsForAPI,
 	}
 
-	_, _, err = client.Auth.AuthenticateWatcher(context.Background(), t)
+	_, _, err = client.Auth.AuthenticateWatcher(ctx, t)
 	if err != nil {
 		return false, err
 	}
@@ -77,7 +76,7 @@ func queryLAPIStatus(hub *cwhub.Hub, credURL string, login string, password stri
 	return true, nil
 }
 
-func (cli *cliLapi) Status(out io.Writer, hub *cwhub.Hub) error {
+func (cli *cliLapi) Status(ctx context.Context, out io.Writer, hub *cwhub.Hub) error {
 	cfg := cli.cfg()
 
 	cred := cfg.API.Client.Credentials
@@ -85,7 +84,7 @@ func (cli *cliLapi) Status(out io.Writer, hub *cwhub.Hub) error {
 	fmt.Fprintf(out, "Loaded credentials from %s\n", cfg.API.Client.CredentialsFilePath)
 	fmt.Fprintf(out, "Trying to authenticate with username %s on %s\n", cred.Login, cred.URL)
 
-	_, err := queryLAPIStatus(hub, cred.URL, cred.Login, cred.Password)
+	_, err := queryLAPIStatus(ctx, hub, cred.URL, cred.Login, cred.Password)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate to Local API (LAPI): %w", err)
 	}
@@ -95,7 +94,7 @@ func (cli *cliLapi) Status(out io.Writer, hub *cwhub.Hub) error {
 	return nil
 }
 
-func (cli *cliLapi) register(apiURL string, outputFile string, machine string, token string) error {
+func (cli *cliLapi) register(ctx context.Context, apiURL string, outputFile string, machine string, token string) error {
 	var err error
 
 	lapiUser := machine
@@ -115,10 +114,9 @@ func (cli *cliLapi) register(apiURL string, outputFile string, machine string, t
 		return fmt.Errorf("parsing api url: %w", err)
 	}
 
-	_, err = apiclient.RegisterClient(&apiclient.Config{
+	_, err = apiclient.RegisterClient(ctx, &apiclient.Config{
 		MachineID:         lapiUser,
 		Password:          password,
-		UserAgent:         cwversion.UserAgent(),
 		RegistrationToken: token,
 		URL:               apiurl,
 		VersionPrefix:     LAPIURLPrefix,
@@ -149,7 +147,7 @@ func (cli *cliLapi) register(apiURL string, outputFile string, machine string, t
 
 	apiConfigDump, err := yaml.Marshal(apiCfg)
 	if err != nil {
-		return fmt.Errorf("unable to marshal api credentials: %w", err)
+		return fmt.Errorf("unable to serialize api credentials: %w", err)
 	}
 
 	if dumpFile != "" {
@@ -197,13 +195,13 @@ func (cli *cliLapi) newStatusCmd() *cobra.Command {
 		Short:             "Check authentication to Local API (LAPI)",
 		Args:              cobra.MinimumNArgs(0),
 		DisableAutoGenTag: true,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			hub, err := require.Hub(cli.cfg(), nil, nil)
 			if err != nil {
 				return err
 			}
 
-			return cli.Status(color.Output, hub)
+			return cli.Status(cmd.Context(), color.Output, hub)
 		},
 	}
 
@@ -225,8 +223,8 @@ func (cli *cliLapi) newRegisterCmd() *cobra.Command {
 Keep in mind the machine needs to be validated by an administrator on LAPI side to be effective.`,
 		Args:              cobra.MinimumNArgs(0),
 		DisableAutoGenTag: true,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return cli.register(apiURL, outputFile, machine, token)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cli.register(cmd.Context(), apiURL, outputFile, machine, token)
 		},
 	}
 
@@ -515,14 +513,14 @@ func detectStaticField(grokStatics []parser.ExtraField) []string {
 
 	for _, static := range grokStatics {
 		if static.Parsed != "" {
-			fieldName := fmt.Sprintf("evt.Parsed.%s", static.Parsed)
+			fieldName := "evt.Parsed." + static.Parsed
 			if !slices.Contains(ret, fieldName) {
 				ret = append(ret, fieldName)
 			}
 		}
 
 		if static.Meta != "" {
-			fieldName := fmt.Sprintf("evt.Meta.%s", static.Meta)
+			fieldName := "evt.Meta." + static.Meta
 			if !slices.Contains(ret, fieldName) {
 				ret = append(ret, fieldName)
 			}
@@ -548,7 +546,7 @@ func detectNode(node parser.Node, parserCTX parser.UnixParserCtx) []string {
 
 	if node.Grok.RunTimeRegexp != nil {
 		for _, capturedField := range node.Grok.RunTimeRegexp.Names() {
-			fieldName := fmt.Sprintf("evt.Parsed.%s", capturedField)
+			fieldName := "evt.Parsed." + capturedField
 			if !slices.Contains(ret, fieldName) {
 				ret = append(ret, fieldName)
 			}
@@ -560,7 +558,7 @@ func detectNode(node parser.Node, parserCTX parser.UnixParserCtx) []string {
 		// ignore error (parser does not exist?)
 		if err == nil {
 			for _, capturedField := range grokCompiled.Names() {
-				fieldName := fmt.Sprintf("evt.Parsed.%s", capturedField)
+				fieldName := "evt.Parsed." + capturedField
 				if !slices.Contains(ret, fieldName) {
 					ret = append(ret, fieldName)
 				}
@@ -595,7 +593,7 @@ func detectSubNode(node parser.Node, parserCTX parser.UnixParserCtx) []string {
 	for _, subnode := range node.LeavesNodes {
 		if subnode.Grok.RunTimeRegexp != nil {
 			for _, capturedField := range subnode.Grok.RunTimeRegexp.Names() {
-				fieldName := fmt.Sprintf("evt.Parsed.%s", capturedField)
+				fieldName := "evt.Parsed." + capturedField
 				if !slices.Contains(ret, fieldName) {
 					ret = append(ret, fieldName)
 				}
@@ -607,7 +605,7 @@ func detectSubNode(node parser.Node, parserCTX parser.UnixParserCtx) []string {
 			if err == nil {
 				// ignore error (parser does not exist?)
 				for _, capturedField := range grokCompiled.Names() {
-					fieldName := fmt.Sprintf("evt.Parsed.%s", capturedField)
+					fieldName := "evt.Parsed." + capturedField
 					if !slices.Contains(ret, fieldName) {
 						ret = append(ret, fieldName)
 					}
